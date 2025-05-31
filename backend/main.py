@@ -3,6 +3,8 @@ import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # Import essential libraries
+import os
+from datetime import datetime
 import asyncio
 import threading
 import time
@@ -22,7 +24,7 @@ import audio as audio_module  # Import as module to avoid name conflicts
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # Serial port configuration
-SERIAL_PORT = '/dev/tty.usbmodem11301'  # or COM3, etc.
+SERIAL_PORT = '/dev/tty.usbmodem112201'  # or COM3, etc.
 BAUD_RATE = 115200
 
 # Initialize serial variable, we'll attempt connection in the main loop
@@ -34,7 +36,11 @@ recording = False
 last_processed_time = 0
 SAMPLE_RATE = audio_module.SAMPLE_RATE  # Use sample rate from audio.py
 video_capture = None
+video_writer = None
 stop_event = threading.Event()
+
+# Create output directory if it doesn't exist
+os.makedirs('recordings', exist_ok=True)
 
 # Score lists that track all measurements
 clarity_scores = []
@@ -88,7 +94,7 @@ async def record_audio_chunk(duration=1.0):
 # Function to start recording
 async def start_recording():
     """Start recording and analyzing audio/video"""
-    global recording, video_capture, frame_buffer, audio_buffer, stop_event
+    global recording, video_capture, frame_buffer, audio_buffer, stop_event, video_writer, frame_count, output_filename
     global clarity_scores, pace_scores, volume_scores, posture_scores, expression_scores
     global eyecontact_scores, speech_scores, engagement_scores, overall_scores
     
@@ -118,12 +124,36 @@ async def start_recording():
         print("Error: Could not open camera")
         return
     
+    # Create video writer for MP4 output
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"recordings/presentation_{timestamp}.mp4"
+    frame_count = 0
+
+    # Get camera properties for video writer
+    frame_width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = 30.0  # Target FPS for the output video
+    
+    print(f"Camera resolution: {frame_width}x{frame_height}")
+
+    # Initialize the video writer with explicit parameters
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for MP4
+    video_writer = cv2.VideoWriter(output_filename, fourcc, fps, (frame_width, frame_height), True)
+    
+    if not video_writer.isOpened():
+        print("Error: Could not initialize video writer")
+        return
+
     # Start recording
     recording = True
     
-    # Start the recording and analysis task
-    print("Starting recording...")
-    asyncio.create_task(record_and_analyze())
+    # Reset frame count
+    frame_count = 0
+    
+    # Set a higher priority for video recording
+    print(f"Starting recording... Saving to {output_filename}")
+    # Create a dedicated task for recording with higher priority
+    recording_task = asyncio.create_task(record_and_analyze())
     
     # Send confirmation back through serial port
     if ser:
@@ -132,7 +162,7 @@ async def start_recording():
 # Function to stop recording
 async def stop_recording():
     """Stop recording and print scores"""
-    global recording, video_capture, stop_event
+    global recording, video_capture, stop_event, video_writer, frame_count, output_filename
     
     if not recording:
         print("Not recording")
@@ -145,6 +175,18 @@ async def stop_recording():
     # Clean up resources
     if video_capture:
         video_capture.release()
+
+    # Finalize and release the video writer
+    if video_writer and video_writer.isOpened():
+        # Make sure all frames are flushed to disk
+        video_writer.release()
+        print(f"Video saved to {output_filename} with {frame_count} frames")
+        if frame_count > 0:
+            print(f"Video duration approximately {frame_count/30:.2f} seconds")
+        else:
+            print("Warning: No frames were recorded!")
+    else:
+        print("Warning: Video writer was not properly opened or already released")
     
     print("\n===== RECORDING RESULTS =====\n")
     print(f"Total duration: {len(overall_scores)} seconds")
@@ -167,13 +209,18 @@ async def stop_recording():
         detailed_scores += f"EngagementScores:{','.join(map(str, engagement_scores))}\n"
         ser.write(detailed_scores.encode('utf-8'))
 
+# Variables to track video recording
+frame_count = 0
+output_filename = ""
+
 async def record_and_analyze():
     """Main function to record and analyze audio and video"""
-    global clarity_scores, pace_scores, volume_scores, posture_scores, expression_scores, eyecontact_scores, speech_scores, engagement_scores, overall_scores
+    global clarity_scores, pace_scores, volume_scores, posture_scores, expression_scores, eyecontact_scores, speech_scores, engagement_scores, overall_scores, video_writer, frame_count
     
     last_process_time = time.time()
     frame_buffer = []
     audio_buffer = []
+    frame_count = 0
     
     print("Starting recording and analysis...")
     
@@ -186,6 +233,18 @@ async def record_and_analyze():
                 await asyncio.sleep(0.1)
                 continue
             
+            # Make a copy of the frame to ensure it's not modified before writing
+            frame_to_write = frame.copy()
+            
+            # Write frame to video file and increment counter
+            if video_writer and video_writer.isOpened():
+                video_writer.write(frame_to_write)
+                frame_count += 1
+                if frame_count % 30 == 0:  # Log every 30 frames (approximately 1 second at 30fps)
+                    print(f"Recorded {frame_count} frames so far")
+            else:
+                print("Warning: Video writer not available or not opened")
+
             # Record audio chunk (1 second)
             audio_chunk = await record_audio_chunk(1.0)
             
@@ -322,9 +381,15 @@ async def record_and_analyze():
                     
                     # Calculate overall score as mean of all scores
                     overall_score = int(sum(latest_scores) / len(latest_scores))
+
                     overall_scores.append(overall_score)
                     
                     print(f"Overall score at {len(overall_scores)}s: {overall_score}")
+                    
+                    # Send overall score to serial port
+                    if ser:
+                        score_message = f"SCORE {overall_score}\n"
+                        ser.write(score_message.encode('utf-8'))
                 except Exception as e:
                     print(f"Error calculating overall score: {str(e)}")
                     # Use previous overall score or default

@@ -109,6 +109,7 @@ def score_presentation_engagement(transcript, model="llama3:8b"):
             if 'score' in response_json and isinstance(response_json['score'], int):
                 score = response_json['score']
                 if 1 <= score <= 100:
+                    print(f"text score: {score}")
                     return score
         except json.JSONDecodeError:
             pass
