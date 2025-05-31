@@ -5,9 +5,6 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 # Explicitly import numpy first
 import numpy as np
 
-# Then import torch (used by whisper)
-import torch
-
 # Other imports
 import sounddevice as sd
 import time
@@ -16,6 +13,7 @@ import math
 
 # Now import whisper after numpy and torch are loaded
 import whisper
+from text import score_presentation_engagement
 
 SAMPLE_RATE = 16000
 CHUNK_DURATION = 3  # seconds
@@ -42,24 +40,37 @@ def select_microphone():
         print("No input devices found!")
         sys.exit(1)
     
+    # Check for HyperX microphone
+    devices = sd.query_devices()
+    hyperx_device_id = None
+    
+    for i in input_devices:
+        device = devices[i]
+        # Case-insensitive check for 'hyperx' in the device name
+        if 'hyperx' in device['name'].lower():
+            hyperx_device_id = i
+            print(f"Found and automatically selected HyperX microphone: {device['name']}")
+            return hyperx_device_id
+    
     # Use default device if only one is available
     if len(input_devices) == 1:
-        print(f"Using the only available input device: {sd.query_devices()[input_devices[0]]['name']}")
+        print(f"Using the only available input device: {devices[input_devices[0]]['name']}")
         return input_devices[0]
     
-    # Ask user to select a device
+    # Ask user to select a device if HyperX not found
+    print("HyperX microphone not found. Please select from available devices:")
     while True:
         selection = input("\nSelect microphone by number (or press Enter for default): ")
         
         if selection == "":
             default_device = sd.default.device[0]
-            print(f"Using default device: {sd.query_devices()[default_device]['name']}")
+            print(f"Using default device: {devices[default_device]['name']}")
             return default_device
         
         try:
             device_id = int(selection)
             if device_id in input_devices:
-                selected_device = sd.query_devices()[device_id]
+                selected_device = devices[device_id]
                 print(f"Selected: {selected_device['name']}")
                 return device_id
             else:
@@ -208,63 +219,63 @@ def calculate_volume_stability(audio_data, segment_duration=0.5, plot_volumes=Fa
     
     return stability_score
 
-while True:
-    chunk = record_chunk()
-    audio_buffer.append(chunk)
+# while True:
+#     chunk = record_chunk()
+#     audio_buffer.append(chunk)
 
-    # Combine all audio from the beginning
-    full_audio = np.concatenate(audio_buffer)
+#     # Combine all audio from the beginning
+#     full_audio = np.concatenate(audio_buffer)
 
-    # Save audio to a temp WAV file for Whisper
-    import tempfile
-    import soundfile as sf
-    temp_file = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            temp_file = f.name
-            print("\nSaving audio to temporary file...")
-            sf.write(f.name, full_audio, SAMPLE_RATE)
+#     # Save audio to a temp WAV file for Whisper
+#     import tempfile
+#     import soundfile as sf
+#     temp_file = None
+#     try:
+#         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+#             temp_file = f.name
+#             print("\nSaving audio to temporary file...")
+#             sf.write(f.name, full_audio, SAMPLE_RATE)
             
-        print("Transcribing audio (this may take a few seconds)...")
-        # Simplified transcription without word timestamps to improve speed
-        result = model.transcribe(temp_file, language="en")
-        transcript = result["text"]
+#         print("Transcribing audio (this may take a few seconds)...")
+#         # Simplified transcription without word timestamps to improve speed
+#         result = model.transcribe(temp_file, language="en")
+#         transcript = result["text"]
         
-        # Extract confidence scores for clarity calculation
-        segments = result.get("segments", [])
+#         # Extract confidence scores for clarity calculation
+#         segments = result.get("segments", [])
         
-        # Calculate average confidence across all segments
-        confidence_scores = [segment.get("avg_logprob", -10) for segment in segments if segment.get("avg_logprob") is not None]
+#         # Calculate average confidence across all segments
+#         confidence_scores = [segment.get("avg_logprob", -10) for segment in segments if segment.get("avg_logprob") is not None]
         
-        # Store confidence data for clarity score calculation
-        if confidence_scores:
-            avg_confidence = sum(confidence_scores) / len(confidence_scores)
-            # Normalize to a 0-100 scale (logprobs are negative, with values closer to 0 being better)
-            # Typical values range from around -1 (very confident) to -2 or lower (less confident)
-            clarity_score = 100 * max(0, min(1, (avg_confidence + 3) / 3))
-        else:
-            # No segments with confidence scores
-            clarity_score = 0
-    except Exception as e:
-        print(f"Error during transcription: {str(e)}")
-        transcript = "[Transcription error]"
-        clarity_score = 0
-    finally:
-        # Clean up temp file
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-            except:
-                pass
+#         # Store confidence data for clarity score calculation
+#         if confidence_scores:
+#             avg_confidence = sum(confidence_scores) / len(confidence_scores)
+#             # Normalize to a 0-100 scale (logprobs are negative, with values closer to 0 being better)
+#             # Typical values range from around -1 (very confident) to -2 or lower (less confident)
+#             clarity_score = 100 * max(0, min(1, (avg_confidence + 3) / 3))
+#         else:
+#             # No segments with confidence scores
+#             clarity_score = 0
+#     except Exception as e:
+#         print(f"Error during transcription: {str(e)}")
+#         transcript = "[Transcription error]"
+#         clarity_score = 0
+#     finally:
+#         # Clean up temp file
+#         if temp_file and os.path.exists(temp_file):
+#             try:
+#                 os.unlink(temp_file)
+#             except:
+#                 pass
 
-    # Calculate WPM using total time
-    elapsed_time = time.time() - start_time
-    wpm = get_wpm(transcript, elapsed_time)
-    pace_score = 100 * math.exp(-((wpm - 80) / 45) ** 2)
+#     # Calculate WPM using total time
+#     elapsed_time = time.time() - start_time
+#     wpm = get_wpm(transcript, elapsed_time)
+#     pace_score = 100 * math.exp(-((wpm - 80) / 45) ** 2)
     
-    # Calculate volume stability (set plot_volumes=True to generate diagnostic graph)
-    volume_stability = calculate_volume_stability(full_audio, segment_duration=0.5, plot_volumes=False)
+#     # Calculate volume stability (set plot_volumes=True to generate diagnostic graph)
+#     volume_stability = calculate_volume_stability(full_audio, segment_duration=0.5, plot_volumes=False)
 
-    print(f"\n[Time Elapsed: {int(elapsed_time)}s] Transcript so far: {transcript.strip()}")
-    print(f"WPM: {wpm:.2f} | Pacing Score: {pace_score:.1f}/100 | Clarity Score: {clarity_score:.1f}/100 | Volume Stability: {volume_stability:.1f}/100\n")
-    print(score_presentation_engagement(transcript.strip()))
+#     print(f"\n[Time Elapsed: {int(elapsed_time)}s] Transcript so far: {transcript.strip()}")
+#     print(f"WPM: {wpm:.2f} | Pacing Score: {pace_score:.1f}/100 | Clarity Score: {clarity_score:.1f}/100 | Volume Stability: {volume_stability:.1f}/100\n")
+#     print(score_presentation_engagement(transcript.strip()))

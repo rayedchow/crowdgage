@@ -510,15 +510,16 @@ class ComprehensiveAnalyzer:
         
         return min(100, max(0, composite_score))
     
-    def process_frame(self, frame):
+    def process_frame(self, frame, draw_annotations=True):
         """
         Process a video frame with both posture and emotion analysis.
         
         Args:
             frame: The video frame to process
+            draw_annotations: Whether to draw score bars and text on the frame
             
         Returns:
-            Processed frame with all annotations
+            tuple: (processed_frame, scores_dict)
         """
         # Copy frame to avoid modifications
         processed_frame = frame.copy()
@@ -541,31 +542,43 @@ class ComprehensiveAnalyzer:
             posture_score, engagement_score, focus_score, eye_contact_score
         )
         
-        # Add emotion info
-        if self.emotion_analyzer.emotion:
-            cv2.putText(
-                processed_frame,
-                f"Emotion: {self.emotion_analyzer.emotion.capitalize()}",
-                (10, 60),
-                self.font,
-                0.7,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA
-            )
+        # Create scores dictionary
+        scores = {
+            "posture_score": posture_score,
+            "engagement_score": engagement_score,
+            "focus_score": focus_score,
+            "eye_contact_score": eye_contact_score,
+            "composite_score": composite_score,
+            "emotion": self.emotion_analyzer.emotion if self.emotion_analyzer.emotion else "neutral"
+        }
         
-        # Draw score bars for all metrics
-        self.draw_score_bar(processed_frame, 100, posture_score, "Posture:")
-        self.draw_score_bar(processed_frame, 130, engagement_score, "Engagement:")
-        self.draw_score_bar(processed_frame, 160, focus_score, "Focus:")
-        self.draw_score_bar(processed_frame, 190, eye_contact_score, "Eye Contact:")
-        self.draw_score_bar(processed_frame, 230, composite_score, "OVERALL:")
+        # Only draw annotations if requested
+        if draw_annotations:
+            # Add emotion info
+            if self.emotion_analyzer.emotion:
+                cv2.putText(
+                    processed_frame,
+                    f"Emotion: {self.emotion_analyzer.emotion.capitalize()}",
+                    (10, 60),
+                    self.font,
+                    0.7,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA
+                )
+            
+            # Draw score bars for all metrics
+            self.draw_score_bar(processed_frame, 100, posture_score, "Posture:")
+            self.draw_score_bar(processed_frame, 130, engagement_score, "Engagement:")
+            self.draw_score_bar(processed_frame, 160, focus_score, "Focus:")
+            self.draw_score_bar(processed_frame, 190, eye_contact_score, "Eye Contact:")
+            self.draw_score_bar(processed_frame, 230, composite_score, "OVERALL:")
         
-        return processed_frame
+        return processed_frame, scores
 
 
 def main():
-    """Main function to run the comprehensive analysis"""
+    """Test function for comprehensive analysis without GUI"""
     # Initialize camera
     print("Initializing camera...")
     cap = cv2.VideoCapture(1)
@@ -580,34 +593,31 @@ def main():
     # Initialize analyzer
     analyzer = ComprehensiveAnalyzer()
     
-    # Get video properties
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
     print("Starting comprehensive analysis...")
-    print("Press 'q' to quit")
+    print("Running for 10 frames, then exiting")
     
-    while True:
+    # Process a few frames as a test
+    for i in range(10):
         # Read frame
         success, frame = cap.read()
         if not success:
             print("Failed to read frame")
             break
         
-        # Process frame with comprehensive analysis
-        processed_frame = analyzer.process_frame(frame)
+        # Process frame with comprehensive analysis (no GUI drawing)
+        _, scores = analyzer.process_frame(frame, draw_annotations=False)
         
-        # Display the result
-        cv2.imshow("CrowdGage Comprehensive Analysis", processed_frame)
+        # Print the scores
+        print(f"Frame {i+1} scores:")
+        for key, value in scores.items():
+            print(f"  {key}: {value}")
         
-        # Check for quit
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # Small delay
+        time.sleep(0.1)
     
     # Cleanup
     cap.release()
-    cv2.destroyAllWindows()
+    print("Test complete")
 
 
 if __name__ == "__main__":
