@@ -137,6 +137,8 @@ def main():
     if not cap.isOpened():
         print("Error: Could not open video.")
         exit()
+    
+    time.sleep(2)
 
     detector = SimpleEmotionDetector()
 
