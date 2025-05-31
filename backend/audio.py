@@ -267,3 +267,4 @@ while True:
 
     print(f"\n[Time Elapsed: {int(elapsed_time)}s] Transcript so far: {transcript.strip()}")
     print(f"WPM: {wpm:.2f} | Pacing Score: {pace_score:.1f}/100 | Clarity Score: {clarity_score:.1f}/100 | Volume Stability: {volume_stability:.1f}/100\n")
+    print(score_presentation_engagement(transcript.strip()))

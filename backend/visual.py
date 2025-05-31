@@ -564,21 +564,84 @@ class ComprehensiveAnalyzer:
         return processed_frame
 
 
-def main():
-    """Main function to run the comprehensive analysis"""
-    # Initialize camera
-    print("Initializing camera...")
-    for camera_index in [0, 1, 2]:
-        print(f"Trying camera index {camera_index}...")
-        cap = cv2.VideoCapture(camera_index)
+def list_cameras():
+    """List all available camera devices
+    
+    Returns:
+        list: List of available camera indices
+    """
+    print("\nAvailable cameras:")
+    available_cameras = []
+    
+    # Try camera indices 0-10 (most systems won't have more than this)
+    for i in range(10):
+        cap = cv2.VideoCapture(i)
         if cap.isOpened():
-            print(f"Successfully opened camera at index {camera_index}")
-            break
-        else:
+            # Try to get a frame to confirm it's working
+            ret, frame = cap.read()
+            if ret:
+                name = f"Camera {i}"
+                # Try to get camera name if available
+                try:
+                    name = cap.getBackendName() + f" ({i})"
+                except:
+                    pass
+                print(f"[{i}] {name}")
+                available_cameras.append(i)
             cap.release()
     
+    return available_cameras
+
+def select_camera():
+    """Let user select which camera to use
+    
+    Returns:
+        int: Selected camera index
+    """
+    available_cameras = list_cameras()
+    
+    if not available_cameras:
+        print("No cameras found!")
+        return None
+    
+    # Use default camera (first available) if only one is available
+    if len(available_cameras) == 1:
+        print(f"Using the only available camera: Camera {available_cameras[0]}")
+        return available_cameras[0]
+    
+    # Ask user to select a camera
+    while True:
+        selection = input("\nSelect camera by number (or press Enter for default): ")
+        
+        if selection == "":
+            default_camera = available_cameras[0]
+            print(f"Using default camera: Camera {default_camera}")
+            return default_camera
+        
+        try:
+            camera_id = int(selection)
+            if camera_id in available_cameras:
+                print(f"Selected: Camera {camera_id}")
+                return camera_id
+            else:
+                print("Invalid selection. Please try again.")
+        except ValueError:
+            print("Please enter a number.")
+
+def main():
+    """Main function to run the comprehensive analysis"""
+    # Let user select which camera to use
+    print("Initializing camera...")
+    camera_index = select_camera()
+    
+    if camera_index is None:
+        print("Error: No cameras available.")
+        return
+    
+    # Initialize selected camera
+    cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
-        print("Error: Could not open any video source.")
+        print(f"Error: Could not open camera at index {camera_index}.")
         return
     
     time.sleep(2)
