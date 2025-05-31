@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 import math
 import sys
+import json
 
 # Project structure setup
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +21,7 @@ from visual import ComprehensiveAnalyzer
 import audio as audio_module
 
 # Constants
-SERIAL_PORT = '/dev/tty.usbmodem112201'
+SERIAL_PORT = '/dev/tty.usbmodem11401'
 BAUD_RATE = 115200
 SAMPLE_RATE = audio_module.SAMPLE_RATE
 
@@ -30,6 +31,7 @@ recording = False
 stop_event = threading.Event()
 cam = None
 out = None
+output_filename = None  # Track the current recording filename
 
 # Buffers
 frame_buffer = []
@@ -82,13 +84,14 @@ async def record_audio_chunk(duration=1.0):
 
 # Start recording
 async def start_recording():
-    global recording, cam, out, stop_event, frame_buffer, audio_buffer
+    global recording, cam, out, stop_event, frame_buffer, audio_buffer, output_filename
     global clarity_scores, pace_scores, volume_scores, posture_scores, expression_scores
     global eyecontact_scores, speech_scores, engagement_scores, overall_scores
 
     if recording:
         print("Already recording")
-        return
+        await stop_recording()
+        await asyncio.sleep(1)  # Give time for cleanup
 
     stop_event.clear()
     frame_buffer.clear()
@@ -115,7 +118,7 @@ async def start_recording():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_filename = f"recordings/presentation_{timestamp}.mp4"
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
     out = cv2.VideoWriter(output_filename, fourcc, 30.0, (frame_width, frame_height))
 
     if not out.isOpened():
@@ -134,7 +137,7 @@ async def start_recording():
 
 # Stop recording
 async def stop_recording():
-    global recording, cam, out
+    global recording, cam, out, output_filename
 
     if not recording:
         print("Not recording")
@@ -143,8 +146,42 @@ async def stop_recording():
     stop_event.set()
     recording = False
 
-    if cam: cam.release()
-    if out: out.release()
+    if cam:
+        cam.release()
+        cam = None
+    if out:
+        out.release()
+        out = None
+
+    # Get the base filename from the current recording
+    base_filename = output_filename.rsplit('.', 1)[0]  # Remove .mp4 extension
+    json_filename = f"{base_filename}.json"
+
+    # Prepare data for JSON export
+    presentation_data = {
+        "timestamp": datetime.now().isoformat(),
+        "duration_seconds": len(overall_scores),
+        "scores": {
+            "overall": overall_scores,
+            "clarity": clarity_scores,
+            "pace": pace_scores,
+            "volume": volume_scores,
+            "posture": posture_scores,
+            "expression": expression_scores,
+            "eye_contact": eyecontact_scores,
+            "speech": speech_scores,
+            "engagement": engagement_scores
+        },
+        "video_file": output_filename
+    }
+
+    # Save to JSON file
+    try:
+        with open(json_filename, 'w') as f:
+            json.dump(presentation_data, f, indent=2)
+        print(f"Presentation data saved to {json_filename}")
+    except Exception as e:
+        print(f"Error saving presentation data: {e}")
 
     print("Recording finished")
     print(f"\n===== RECORDING RESULTS =====\nDuration: {len(overall_scores)} seconds\nScores: {overall_scores}\n============================\n")
