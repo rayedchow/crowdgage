@@ -10,7 +10,7 @@ app = FastAPI()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000"],  # Frontend URLs
+    allow_origins=["http://localhost:3000"],  # Frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -18,7 +18,7 @@ app.add_middleware(
 
 # Mount the recordings directory
 recordings_dir = Path("recordings")
-app.mount("/recordings", StaticFiles(directory=str(recordings_dir), html=True), name="recordings")
+app.mount("/recordings", StaticFiles(directory=str(recordings_dir)), name="recordings")
 
 @app.get("/recordings")
 async def list_recordings():

@@ -2,6 +2,11 @@
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
+# Fix multiprocessing issues
+import multiprocessing
+# Use spawn method instead of fork to prevent issues with threads
+multiprocessing.set_start_method('spawn', force=True)
+
 # Imports
 import cv2
 import numpy as np
@@ -32,6 +37,7 @@ stop_event = threading.Event()
 cam = None
 out = None
 output_filename = None  # Track the current recording filename
+resources_lock = threading.RLock()  # Lock for protecting resource access
 
 # Buffers
 frame_buffer = []
@@ -60,18 +66,31 @@ def video_recording_loop():
     print("Video thread started")
 
     while recording and not stop_event.is_set():
-        ret, frame = cam.read()
-        if not ret:
-            print("Frame capture failed")
-            continue
+        try:
+            with resources_lock:
+                if cam is None or not recording:
+                    break
+                
+                ret, frame = cam.read()
+                if not ret:
+                    print("Frame capture failed")
+                    continue
 
-        out.write(frame)
-        frame_buffer.append(frame)
+                if out is not None:
+                    out.write(frame)
+                
+                # Make a copy of the frame to prevent memory issues
+                frame_copy = frame.copy()
+                frame_buffer.append(frame_copy)
 
-        # Keep only the latest 10
-        if len(frame_buffer) > 10:
-            frame_buffer = frame_buffer[-10:]
-
+                # Keep only the latest 10
+                if len(frame_buffer) > 10:
+                    # Clear references to old frames
+                    del frame_buffer[0:len(frame_buffer)-10]
+                    frame_buffer = frame_buffer[-10:]
+        except Exception as e:
+            print(f"Video thread error: {e}")
+            
         time.sleep(1 / 30.0)
 
     print("Video thread stopped")
@@ -107,7 +126,7 @@ async def start_recording():
     engagement_scores = [50]
     overall_scores.clear()
 
-    cam = cv2.VideoCapture(1)
+    cam = cv2.VideoCapture(2)
     if not cam.isOpened():
         print("Error: Could not open camera")
         return
@@ -145,13 +164,26 @@ async def stop_recording():
 
     stop_event.set()
     recording = False
-
-    if cam:
-        cam.release()
-        cam = None
-    if out:
-        out.release()
-        out = None
+    
+    # Allow video thread to exit
+    await asyncio.sleep(0.5)
+    
+    with resources_lock:
+        if cam:
+            try:
+                cam.release()
+            except Exception as e:
+                print(f"Error releasing camera: {e}")
+            finally:
+                cam = None
+                
+        if out:
+            try:
+                out.release()
+            except Exception as e:
+                print(f"Error releasing video writer: {e}")
+            finally:
+                out = None
 
     # Get the base filename from the current recording
     base_filename = output_filename.rsplit('.', 1)[0]  # Remove .mp4 extension
@@ -192,18 +224,22 @@ async def stop_recording():
 # Main analysis loop
 async def record_and_analyze():
     global clarity_scores, pace_scores, volume_scores, posture_scores, expression_scores
-    global eyecontact_scores, speech_scores, engagement_scores, overall_scores
+    global eyecontact_scores, speech_scores, engagement_scores, overall_scores, audio_buffer
 
     last_process_time = time.time()
 
     while recording and not stop_event.is_set():
         try:
             audio_chunk = await record_audio_chunk(1.0)
-            audio_buffer.append(audio_chunk)
+            audio_buffer.append(audio_chunk.copy())  # Create a copy to prevent memory issues
 
             current_time = time.time()
             if current_time - last_process_time >= 1.0 and frame_buffer:
-                latest_frame = frame_buffer[-1]
+                with resources_lock:
+                    if not frame_buffer:
+                        continue
+                    # Make a copy to safely process outside the lock
+                    latest_frame = frame_buffer[-1].copy()
 
                 try:
                     processed_frame, scores = visual_analyzer.process_frame(latest_frame)
@@ -219,11 +255,17 @@ async def record_and_analyze():
                     expression_scores.append(expression_scores[-1])
 
                 try:
-                    combined_audio = np.concatenate(audio_buffer[-3:]) if len(audio_buffer) >= 3 else audio_buffer[-1]
-                    result = audio_module.model.transcribe(combined_audio)
+                    # Create a copy of the audio data to prevent memory issues
+                    if len(audio_buffer) >= 3:
+                        audio_to_process = np.concatenate([chunk.copy() for chunk in audio_buffer[-3:]])
+                    else:
+                        audio_to_process = audio_buffer[-1].copy()
+                        
+                    # Process audio in a try block to catch any transcription errors
+                    result = audio_module.model.transcribe(audio_to_process)
                     transcript = result["text"].strip()
-                    wpm = audio_module.get_wpm(transcript, len(combined_audio) / SAMPLE_RATE)
-                    volume_stability = audio_module.calculate_volume_stability(combined_audio)
+                    wpm = audio_module.get_wpm(transcript, len(audio_to_process) / SAMPLE_RATE)
+                    volume_stability = audio_module.calculate_volume_stability(audio_to_process)
 
                     avg_logprob = 0
                     if 'segments' in result and result['segments']:
@@ -271,7 +313,9 @@ async def record_and_analyze():
                 last_process_time = current_time
 
                 if len(audio_buffer) > 10:
-                    audio_buffer[:] = audio_buffer[-10:]
+                    # Clear references to old buffers
+                    del audio_buffer[0:len(audio_buffer)-10]
+                    audio_buffer = audio_buffer[-10:]
 
             await asyncio.sleep(0.01)
 
@@ -288,6 +332,27 @@ async def main():
 
     last_try = 0
     retry_delay = 5
+    
+    # Set up proper signal handlers
+    try:
+        import signal
+        
+        def cleanup_handler(signum, frame):
+            print(f"Received signal {signum}, cleaning up...")
+            stop_event.set()
+            with resources_lock:
+                if cam:
+                    cam.release()
+                if out:
+                    out.release()
+                if ser:
+                    ser.close()
+            sys.exit(0)
+            
+        signal.signal(signal.SIGINT, cleanup_handler)
+        signal.signal(signal.SIGTERM, cleanup_handler)
+    except Exception as e:
+        print(f"Failed to set up signal handlers: {e}")
 
     while True:
         now = time.time()
@@ -319,4 +384,17 @@ async def main():
         await asyncio.sleep(0.1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print(f"Main loop exception: {e}")
+    finally:
+        # Final cleanup
+        print("Performing final cleanup...")
+        with resources_lock:
+            if cam:
+                cam.release()
+            if out:
+                out.release()
+            if ser:
+                ser.close()
